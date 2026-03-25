@@ -1,0 +1,43 @@
+# .dockerignore — Files to exclude from the Docker build context
+# Keep the image lean and prevent secrets from being baked in.
+
+.env
+.env.local
+*.env
+
+# Runtime files
+.streamlit.pid
+.tunnel.pid
+.streamlit.sock
+logs/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Cloned repo (will be cloned at runtime)
+repo/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

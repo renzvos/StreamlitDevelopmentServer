@@ -1,0 +1,62 @@
+# =============================================================================
+# Streamlit Development Machine — .gitignore
+# =============================================================================
+
+# Environment / secrets — NEVER commit these
+.env
+*.env.local
+
+# Runtime PID and socket files
+.streamlit.pid
+.tunnel.pid
+.streamlit.sock
+*.pid
+*.sock
+
+# Log files
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Cloned repository (managed at runtime)
+repo/
+
+# VSCode user-specific files (tasks.json is committed because it's generated)
+.vscode/settings.json
+.vscode/launch.json
+.vscode/*.code-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor temp files
+*.swp
+*.swo
+*~
+.idea/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker build cache
+docker/*.tar

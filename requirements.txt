@@ -1,0 +1,39 @@
+# =============================================================================
+# Streamlit Development Machine — Python Dependencies
+# =============================================================================
+# This file is the source of truth for Python packages.
+# sds/setup/deps.py reads this file to drive `pip install -r requirements.txt`.
+# Pin versions for reproducibility.
+# =============================================================================
+
+# --- CLI framework ---
+# Typer provides the command-line interface with type hints and auto-help.
+typer[all]>=0.9.0,<1.0.0
+
+# --- Terminal UI ---
+# Rich provides styled terminal output: panels, tables, progress bars, live views.
+rich>=13.7.0,<15.0.0
+
+# --- Interactive prompts ---
+# Questionary wraps prompt_toolkit for interactive text/password/select prompts.
+questionary>=2.0.0,<3.0.0
+
+# --- Environment / Config ---
+# python-dotenv loads .env files into os.environ.
+python-dotenv>=1.0.0,<2.0.0
+
+# --- Process management ---
+# psutil checks process liveness by PID; used by daemon and status commands.
+psutil>=5.9.0,<7.0.0
+
+# --- HTTP ---
+# requests is used for the Microsoft device-flow OAuth token exchange.
+requests>=2.31.0,<3.0.0
+
+# --- Git ---
+# GitPython is used for programmatic git operations (clone, pull, config).
+GitPython>=3.1.40,<4.0.0
+
+# --- Streamlit (the actual dev server) ---
+# This is the framework the user's code is built with.
+streamlit>=1.32.0,<2.0.0
