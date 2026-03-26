@@ -4,6 +4,7 @@
 
 # Environment / secrets — NEVER commit these
 .env
+docker.env
 *.env.local
 
 # Runtime PID and socket files

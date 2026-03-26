@@ -8,14 +8,12 @@
 # Build:
 #   docker build -t streamlit-dev-machine .
 #
-# Run (passing config via environment variables):
-#   docker run -it \
-#     -e GIT_REPO_URL=https://github.com/user/repo \
-#     -e GIT_TOKEN=ghp_... \
-#     -e STREAMLIT_DEV_FILE=litdev.py \
-#     -e STREAMLIT_PORT=8501 \
-#     -p 8501:8501 \
-#     streamlit-dev-machine
+# Run using the docker.env file (recommended):
+#   docker run -it --env-file docker.env -p 8501:8501 streamlit-dev-machine
+#
+# GitHub authentication (for private repos) is handled interactively via
+# `gh auth login` inside the container — no GIT_TOKEN needed.
+# Public repos (like the default streamlit-example) need no auth at all.
 #
 # NOTE: The identity fingerprint check is BYPASSED in Docker mode
 #       (DOCKER_MODE=true). All secrets are injected via `-e` flags
@@ -65,12 +63,40 @@ FROM python:3.11-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install only runtime system dependencies (no build tools).
-# git is needed for clone/pull operations at runtime.
+# Install runtime system dependencies.
+# git       — for clone/pull at runtime.
+# curl      — for healthcheck and downloads.
+# tar       — for extracting the VSCode CLI archive.
+# gh        — GitHub CLI for interactive authentication (no tokens needed).
+#             Installed from the official GitHub CLI apt repo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    tar \
+    gnupg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# Install the VSCode Server CLI (`code tunnel`).
+# Uses update.code.visualstudio.com/latest — the canonical stable endpoint.
+# Architecture is detected at build time (amd64 → x64, arm64 → arm64).
+# Binary is placed at /usr/local/bin/code and made executable.
+RUN ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "arm64" ]; then \
+         VS_ARCH="arm64"; \
+       else \
+         VS_ARCH="x64"; \
+       fi \
+    && curl -fsSL "https://update.code.visualstudio.com/latest/cli-linux-${VS_ARCH}/stable" \
+       -o /tmp/vscode-cli.tar.gz \
+    && tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/code \
+    && rm /tmp/vscode-cli.tar.gz
 
 # Copy the virtual environment from the builder stage.
 COPY --from=builder /opt/venv /opt/venv
@@ -97,17 +123,18 @@ ENV ALLOWED_USER=
 ENV MACHINE_FINGERPRINT=
 
 # --- Git ---
-# Default repo: official public Streamlit example (no token required)
+# Default repo: official public Streamlit example (no token required).
+# Authentication is handled interactively via `gh auth login` at runtime.
+# GIT_TOKEN is intentionally absent — use gh CLI instead.
 ENV GIT_USERNAME=streamlit-dev
 ENV GIT_EMAIL=dev@example.com
-ENV GIT_TOKEN=
-ENV GIT_REPO_URL=https://github.com/streamlit/streamlit-example
-ENV GIT_BRANCH=master
+ENV GIT_REPO_URL=https://github.com/rz-rinvest/portfolio_trader.git
+ENV GIT_BRANCH=main
 ENV REPO_FOLDER=./repo
 
 # --- Streamlit dev server ---
 # streamlit_app.py is the entry file in the streamlit-example repo
-ENV STREAMLIT_DEV_FILE=streamlit_app.py
+ENV STREAMLIT_DEV_FILE=litdev.py
 ENV STREAMLIT_PORT=8501
 ENV STREAMLIT_HOST=0.0.0.0
 

@@ -2,45 +2,43 @@
 # =============================================================================
 # docker/start.py — Docker container entrypoint
 # =============================================================================
-# This script is the CMD entrypoint when running in a Docker container.
-# It replaces the onboarding wizard with a streamlined startup that reads
-# all configuration from environment variables injected by `docker run -e`.
+# Startup sequence inside the container:
 #
-# What this script does:
-#   1. Validates that required environment variables are present.
-#   2. Runs git clone/pull to get the repository.
-#   3. Installs Python packages (from requirements.txt).
-#   4. Starts the Streamlit dev server.
-#   5. Blocks (keeps the container alive) until the process exits.
+#   [1/5] Validate required environment variables
+#   [2/5] Install Python dependencies
+#   [3/5] GitHub auth (gh auth login) + git clone/pull
+#   [4/5] VSCode tunnel  ← Microsoft device-flow auth on first run, then starts
+#   [5/5] Streamlit dev server
 #
-# What it SKIPS (vs the full CLI):
-#   - Identity fingerprint check (DOCKER_MODE=true bypasses it).
-#   - VSCode tunnel (not typically used in Docker mode).
-#   - Microsoft auth (tunnel not running).
-#   - Interactive onboarding wizard.
+# Both the tunnel and Streamlit run concurrently:
+#   - Tunnel runs as a detached background thread (keeps going until container stops)
+#   - Streamlit runs in the foreground; the script blocks until it exits
 #
-# All configuration comes from environment variables. Pass them with:
-#   docker run -e GIT_REPO_URL=... -e GIT_TOKEN=... -e STREAMLIT_DEV_FILE=...
+# Authentication split (two independent systems):
+#   - GitHub  → gh auth login   (repo access only)
+#   - VSCode  → Microsoft device-flow via `code tunnel` (web editor access only)
+#
+# All config comes from docker.env:
+#   docker run -it --env-file docker.env -p 8501:8501 streamlit-dev-machine
 # =============================================================================
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Ensure sds package is importable from the project root.
+# Ensure the sds package is importable from the project root.
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # ---------------------------------------------------------------------------
-# Set DOCKER_MODE before importing any sds modules so the identity guard
-# skips its checks. This must be set BEFORE sds.config is imported.
+# Set DOCKER_MODE before any sds import so the identity guard is skipped.
 # ---------------------------------------------------------------------------
 os.environ.setdefault("DOCKER_MODE", "true")
 
-# Now import sds modules.
 from sds.config import cfg
 from sds.ui.console import (
     console,
@@ -50,66 +48,45 @@ from sds.ui.console import (
     print_success,
     print_error,
     print_warning,
+    print_status_table,
 )
 from sds.streamlit.daemon import start as streamlit_start, wait_forever
 
 
 # ---------------------------------------------------------------------------
-# Required environment variables for Docker mode
+# Required environment variables
 # ---------------------------------------------------------------------------
 
 REQUIRED_VARS = [
     "GIT_REPO_URL",
     "STREAMLIT_DEV_FILE",
+    "VSCODE_TUNNEL_NAME",
 ]
 
 
+# ---------------------------------------------------------------------------
+# Step functions
+# ---------------------------------------------------------------------------
+
 def validate_env() -> bool:
     """
-    Check that all required environment variables are set.
-
-    Returns True if all required vars are present, False otherwise.
-    Missing vars are listed clearly so the user knows what to add.
+    Ensure all required environment variables are present.
+    Prints a clear list of anything missing.
     """
     missing = [v for v in REQUIRED_VARS if not os.environ.get(v, "").strip()]
-
     if missing:
         print_error(
             "Missing required environment variables:\n" +
             "\n".join(f"  - {v}" for v in missing) +
-            "\n\n"
-            "  Pass them with: docker run -e VAR=value ..."
+            "\n\n  Add them to docker.env and re-run."
         )
         return False
-
     return True
 
 
-def setup_git() -> bool:
-    """
-    Configure git and clone/pull the repository.
-
-    Returns True on success, False on failure.
-    """
-    print_info("Setting up git and cloning repository ...")
-
-    try:
-        from sds.setup.git_setup import setup_git as _setup_git
-        _setup_git()
-        return True
-    except Exception as exc:
-        print_error(f"Git setup failed: {exc}")
-        return False
-
-
 def install_deps() -> bool:
-    """
-    Install Python packages from requirements.txt.
-
-    Returns True on success, False on failure.
-    """
+    """Install Python packages from requirements.txt."""
     print_info("Installing Python dependencies ...")
-
     try:
         from sds.setup.deps import install_python_packages
         install_python_packages()
@@ -119,55 +96,125 @@ def install_deps() -> bool:
         return False
 
 
-def main() -> int:
+def setup_github() -> bool:
     """
-    Main Docker startup sequence.
+    Run gh auth + git config + clone/pull.
 
-    Returns exit code (0 = success, 1 = failure).
+    `gh auth login` is triggered interactively if the user is not already
+    authenticated. This covers GitHub repo access only — not VSCode/Microsoft.
     """
+    print_info("Setting up GitHub auth and cloning repository ...")
+    try:
+        from sds.setup.git_setup import setup_git
+        setup_git()
+        return True
+    except Exception as exc:
+        print_error(f"Git/GitHub setup failed: {exc}")
+        return False
+
+
+def start_vscode_tunnel() -> bool:
+    """
+    Start the VSCode tunnel in a background thread.
+
+    On first run, `code tunnel` prints a Microsoft device-flow URL+code to
+    the terminal. The user must open the URL in a browser and enter the code.
+    Subsequent runs reuse the cached token silently.
+
+    The tunnel runs detached — it keeps running alongside Streamlit.
+    Returns True immediately after the background thread is started.
+    """
+    from sds.tunnel.manager import start as tunnel_start, is_running
+
+    if is_running():
+        print_warning("VSCode tunnel is already running.")
+        return True
+
+    print_info(
+        "Starting VSCode tunnel ...\n"
+        "  On first run you will see a Microsoft login prompt below.\n"
+        "  Open the URL in your browser and enter the code shown.\n"
+        "  This is separate from your GitHub login above."
+    )
+
+    # Run the tunnel start in a background thread so it doesn't block
+    # the Streamlit startup below. The tunnel process itself is detached
+    # via start_new_session=True inside tunnel/manager.py.
+    def _run_tunnel():
+        success = tunnel_start()
+        if success:
+            print_success(
+                f"VSCode tunnel running.\n"
+                f"  Connect at: https://vscode.dev/tunnel/{cfg.vscode_tunnel_name}"
+            )
+        else:
+            print_warning("VSCode tunnel failed to start. Streamlit will still run.")
+
+    t = threading.Thread(target=_run_tunnel, name="tunnel-starter", daemon=True)
+    t.start()
+
+    # Give the tunnel a moment to emit the Microsoft auth prompt before
+    # Streamlit output floods the terminal.
+    time.sleep(3)
+
+    return True
+
+
+def start_streamlit() -> bool:
+    """Start the Streamlit dev server (foreground — blocks until exit)."""
+    print_info("Starting Streamlit dev server ...")
+    return streamlit_start()
+
+
+# ---------------------------------------------------------------------------
+# Main startup sequence
+# ---------------------------------------------------------------------------
+
+def main() -> int:
     print_banner()
     print_header(
         "Docker Mode",
-        "Starting Streamlit Development Machine in container...",
+        f"repo: {os.environ.get('GIT_REPO_URL', '?')}  |  file: {os.environ.get('STREAMLIT_DEV_FILE', '?')}",
     )
 
-    # Step 1 — Validate required environment.
-    print_info("[1/4] Validating environment variables ...")
-    if not validate_env():
-        return 1
-    print_success("Environment variables OK.")
+    steps = [
+        ("[1/5] Validating environment",          validate_env),
+        ("[2/5] Installing dependencies",          install_deps),
+        ("[3/5] GitHub auth + clone/pull",         setup_github),
+        ("[4/5] VSCode tunnel",                    start_vscode_tunnel),
+        ("[5/5] Starting Streamlit dev server",    start_streamlit),
+    ]
 
-    # Step 2 — Install Python dependencies.
-    print_info("[2/4] Installing dependencies ...")
-    if not install_deps():
-        return 1
+    for label, fn in steps:
+        console.print()
+        print_info(label)
+        if not fn():
+            return 1
 
-    # Step 3 — Git setup (configure + clone/pull).
-    print_info("[3/4] Configuring git and cloning repository ...")
-    if not setup_git():
-        return 1
+    # Print final status table.
+    from sds.tunnel.manager import status as tunnel_status
+    from sds.streamlit.daemon import status as st_status
 
-    # Step 4 — Start Streamlit.
-    print_info("[4/4] Starting Streamlit dev server ...")
-    if not streamlit_start():
-        return 1
+    tn = tunnel_status()
+    st = st_status()
 
-    # Print a summary of what's running.
-    console.print()
-    print_success(
-        f"Container is ready!\n"
-        f"  Streamlit:  http://0.0.0.0:{cfg.streamlit_port}\n"
-        f"  Entry file: {cfg.streamlit_entry_point}"
-    )
-    console.print()
+    print_status_table([
+        {
+            "name": "Streamlit Dev Server",
+            "status": "running" if st["running"] else "stopped",
+            "detail": st.get("url", ""),
+        },
+        {
+            "name": "VSCode Tunnel",
+            "status": "running" if tn["running"] else "stopped",
+            "detail": tn.get("url") or cfg.vscode_tunnel_name,
+        },
+    ])
 
-    # Block until Streamlit exits (keeps the container alive).
-    # In Docker, if the main process exits, the container stops.
+    # Block until Streamlit exits — keeps the container alive.
     wait_forever()
-
     return 0
 
 
 if __name__ == "__main__":
-    exit_code = main()
-    sys.exit(exit_code)
+    sys.exit(main())
