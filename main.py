@@ -30,7 +30,17 @@ if str(PROJECT_ROOT) not in sys.path:
 # ---------------------------------------------------------------------------
 # Import and run the Typer application.
 # ---------------------------------------------------------------------------
-from sds.cli import app
+try:
+    from sds.cli import app
+except ModuleNotFoundError as exc:
+    if exc.name in {"typer", "rich", "questionary", "dotenv", "psutil", "requests", "git"}:
+        print(
+            "Missing required dependencies.\n"
+            "Install them with:\n"
+            "  python -m pip install -r requirements.txt"
+        )
+        raise SystemExit(1) from exc
+    raise
 
 if __name__ == "__main__":
     app()
