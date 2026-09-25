@@ -1,18 +1,23 @@
-import pytest
+import os
+import unittest
+from unittest.mock import patch
 
 from sds import identity
 
 
-def test_verify_identity_returns_false_when_not_configured():
-    assert identity.verify_identity("", "runner") is False
-    assert identity.verify_identity("fingerprint", "") is False
+class VerifyIdentityTests(unittest.TestCase):
+    def test_returns_false_when_not_configured(self):
+        self.assertFalse(identity.verify_identity("", "runner"))
+        self.assertFalse(identity.verify_identity("fingerprint", ""))
+
+    def test_accepts_case_insensitive_user_match(self):
+        with patch.dict(os.environ, {"USER": "Runner"}, clear=False):
+            self.assertTrue(identity.verify_identity("fingerprint", " runner "))
+
+    def test_rejects_different_user(self):
+        with patch.dict(os.environ, {"USER": "alice"}, clear=False):
+            self.assertFalse(identity.verify_identity("fingerprint", "bob"))
 
 
-def test_verify_identity_accepts_case_insensitive_user_match(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("USER", "Runner")
-    assert identity.verify_identity("fingerprint", " runner ") is True
-
-
-def test_verify_identity_rejects_different_user(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("USER", "alice")
-    assert identity.verify_identity("fingerprint", "bob") is False
+if __name__ == "__main__":
+    unittest.main()
